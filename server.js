@@ -43,7 +43,6 @@ const io = new Server(server, {
 });
 
 // In-memory storage for the state of 3D objects and other project data
-// Format: { projectId: { position: {...}, rotation: {...}, scale: {...}, annotations: [...] } }
 const projectStates = {};
 
 io.on('connection', (socket) => {
@@ -57,6 +56,15 @@ io.on('connection', (socket) => {
         // Initialize project state if it doesn't exist
         if (!projectStates[projectId]) {
             projectStates[projectId] = { annotations: [] };
+        }
+
+        if (!projectStates[projectId] || !projectStates[projectId].position) {
+            projectStates[projectId] = {
+                position: { x: 0, y: 0.5, z: 0 },
+                rotation: { x: 0, y: 0, z: 0 },
+                scale: { x: 1, y: 1, z: 1 },
+                annotations: []
+            };
         }
 
         // Send existing annotations to the joining user
@@ -123,6 +131,31 @@ io.on('connection', (socket) => {
         // Broadcast the new annotation to all other users in the project
         socket.to(projectId).emit('annotationAdded', data);
     });
+
+    socket.on('deleteAnnotation', (data) => {
+        const { projectId, annotationId } = data;
+
+        if (
+            projectStates[projectId] &&
+            Array.isArray(projectStates[projectId].annotations)
+        ) {
+            projectStates[projectId].annotations = projectStates[projectId].annotations.filter(
+                (a) => a.id !== annotationId
+            );
+        }
+
+        io.to(projectId).emit('annotationDeleted', data);
+    });
+
+    // === CHAT SYSTEM ===
+    socket.on('sendMessage', (data) => {
+        const { projectId, message } = data;
+        console.log(`💬 [${projectId}] ${message.user}: ${message.text}`);
+
+        // Broadcast the message to all users in the room
+        socket.to(projectId).emit('receiveMessage', { projectId, message });
+    });
+
 
 });
 
