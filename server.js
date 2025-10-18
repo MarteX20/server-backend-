@@ -1,165 +1,120 @@
-import express from 'express';
-import http from 'http';
-import { Server } from 'socket.io';
-import cors from 'cors';
+import express from "express";
+import http from "http";
+import { Server } from "socket.io";
+import cors from "cors";
+import { MongoClient, ObjectId } from "mongodb";
+import dotenv from "dotenv";
 
-// Initialize Express application
+dotenv.config();
+
 const app = express();
-// Enable CORS for all routes
 app.use(cors());
-// Enable JSON body parsing for Express
 app.use(express.json());
 
+const server = http.createServer(app);
+const io = new Server(server, { cors: { origin: "*" } });
 
-// Simple in-memory storage for project list
-let projects = [
-    { id: 1, title: 'Test Project' }
-];
+// === CONNECT TO MONGO ATLAS ===
+const client = new MongoClient(process.env.MONGO_URI);
+await client.connect();
+const db = client.db("collab3d");
+const projectsCollection = db.collection("projects");
+console.log("✅ Connected to MongoDB Atlas ====================");
 
 // === EXPRESS ROUTES ===
 
-// GET endpoint to retrieve the list of projects
-app.get('/projects', (req, res) => {
+// Get all projects
+app.get("/projects", async (req, res) => {
+    const projects = await projectsCollection.find().toArray();
     res.json(projects);
 });
 
-// POST endpoint to create a new project
-app.post('/projects', (req, res) => {
+// Create a new project
+app.post("/projects", async (req, res) => {
+    const { title } = req.body;
     const newProject = {
-        id: projects.length + 1,
-        title: req.body.title // Expects { "title": "New Title" } in the request body
-    };
-    projects.push(newProject);
-    res.json(newProject);
-});
-
-// === SOCKET.IO SETUP ===
-
-// Create an HTTP server instance using the Express app
-const server = http.createServer(app);
-// Initialize Socket.IO server and enable CORS for client connections
-const io = new Server(server, {
-    cors: { origin: '*' }
-});
-
-// In-memory storage for the state of 3D objects and other project data
-const projectStates = {};
-
-io.on('connection', (socket) => {
-    console.log('🟢 User connected:', socket.id);
-
-    // Event handler when a user joins a specific project room
-    socket.on('joinProject', (projectId) => {
-        socket.join(projectId);
-        console.log(`👥 ${socket.id} joined project ${projectId}`);
-
-        // Initialize project state if it doesn't exist
-        if (!projectStates[projectId]) {
-            projectStates[projectId] = { annotations: [] };
-        }
-
-        if (!projectStates[projectId] || !projectStates[projectId].position) {
-            projectStates[projectId] = {
+        title,
+        state: {
+            object: {
                 position: { x: 0, y: 0.5, z: 0 },
                 rotation: { x: 0, y: 0, z: 0 },
                 scale: { x: 1, y: 1, z: 1 },
-                annotations: []
-            };
-        }
-
-        // Send existing annotations to the joining user
-        socket.emit('loadAnnotations', {
-            projectId,
-            annotations: projectStates[projectId].annotations || [],
-        })
-
-        // Send the current state of the main object (e.g., cube) to the joining user
-        if (projectStates[projectId]) {
-            socket.emit('objectUpdated', {
-                projectId,
-                ...projectStates[projectId],
-            });
-        }
-    });
-
-    // Event handler when an object's position/rotation/scale is updated by a user
-    socket.on('updateObject', (data) => {
-        const { projectId, position, rotation, scale } = data;
-
-        // Ensure state object exists
-        if (!projectStates[projectId]) {
-            projectStates[projectId] = {};
-        }
-
-        // Update the server's in-memory state
-        projectStates[projectId].position = position;
-        projectStates[projectId].rotation = rotation;
-        projectStates[projectId].scale = scale;
-
-        // Broadcast the update to all other users in the same room (project)
-        socket.to(projectId).emit('objectUpdated', data);
-    });
-
-    // Event handler for synchronizing camera position (useful for "follow me" features)
-    socket.on('updateCamera', (data) => {
-        // Broadcast the camera update to all others in the room
-        socket.to(data.projectId).emit('cameraUpdated', data);
-    });
-
-    // Event handler when a user disconnects
-    socket.on('disconnect', () => {
-        console.log('🔴 User disconnected:', socket.id);
-    });
-
-    // Event handler for adding a new annotation to the project
-    socket.on('addAnnotation', (data) => {
-        const { projectId, annotation } = data;
-
-        // Ensure state object exists (initialization)
-        if (!projectStates[projectId]) {
-            projectStates[projectId] = {};
-        }
-
-        // Ensure annotations array exists
-        if (!projectStates[projectId].annotations) {
-            projectStates[projectId].annotations = [];
-        }
-
-        // Add the new annotation to the server state
-        projectStates[projectId].annotations.push(annotation);
-
-        // Broadcast the new annotation to all other users in the project
-        socket.to(projectId).emit('annotationAdded', data);
-    });
-
-    socket.on('deleteAnnotation', (data) => {
-        const { projectId, annotationId } = data;
-
-        if (
-            projectStates[projectId] &&
-            Array.isArray(projectStates[projectId].annotations)
-        ) {
-            projectStates[projectId].annotations = projectStates[projectId].annotations.filter(
-                (a) => a.id !== annotationId
-            );
-        }
-
-        io.to(projectId).emit('annotationDeleted', data);
-    });
-
-    // === CHAT SYSTEM ===
-    socket.on('sendMessage', (data) => {
-        const { projectId, message } = data;
-        console.log(`💬 [${projectId}] ${message.user}: ${message.text}`);
-
-        // Broadcast the message to all users in the room
-        socket.to(projectId).emit('receiveMessage', { projectId, message });
-    });
-
-
+            },
+            annotations: [],
+            chat: [],
+            camera: null,
+        },
+        createdAt: new Date(),
+    };
+    const result = await projectsCollection.insertOne(newProject);
+    res.json({ _id: result.insertedId, ...newProject });
 });
 
-// === SERVER STARTUP ===
+// === SOCKET.IO ===
+io.on("connection", (socket) => {
+    console.log("🟢 User connected:", socket.id);
 
-const PORT = 4000;
-server.listen(PORT, () => console.log(`🚀 Server running on http://localhost:${PORT}`));
+    // Join project
+    socket.on("joinProject", async (projectId) => {
+        socket.join(projectId);
+        console.log(`👥 ${socket.id} joined project ${projectId}`);
+
+        const project = await projectsCollection.findOne({ _id: new ObjectId(projectId) });
+        if (project) {
+            socket.emit("loadProject", project.state);
+        }
+    });
+
+    // Update object transform
+    socket.on("updateObject", async ({ projectId, position, rotation, scale }) => {
+        await projectsCollection.updateOne(
+            { _id: new ObjectId(projectId) },
+            { $set: { "state.object": { position, rotation, scale } } }
+        );
+        socket.to(projectId).emit("objectUpdated", { projectId, position, rotation, scale });
+    });
+
+    // Update camera
+    socket.on("updateCamera", async ({ projectId, camera, socketId }) => {
+        await projectsCollection.updateOne(
+            { _id: new ObjectId(projectId) },
+            { $set: { "state.camera": camera } }
+        );
+        socket.to(projectId).emit("cameraUpdated", { projectId, camera, socketId });
+    });
+
+    // Add annotation
+    socket.on("addAnnotation", async ({ projectId, annotation }) => {
+        await projectsCollection.updateOne(
+            { _id: new ObjectId(projectId) },
+            { $push: { "state.annotations": annotation } }
+        );
+        io.to(projectId).emit("annotationAdded", { projectId, annotation });
+    });
+
+    // Delete annotation
+    socket.on("deleteAnnotation", async ({ projectId, annotationId }) => {
+        await projectsCollection.updateOne(
+            { _id: new ObjectId(projectId) },
+            { $pull: { "state.annotations": { id: annotationId } } }
+        );
+        io.to(projectId).emit("annotationDeleted", { projectId, annotationId });
+    });
+
+    // Chat
+    socket.on("sendMessage", async ({ projectId, message }) => {
+        await projectsCollection.updateOne(
+            { _id: new ObjectId(projectId) },
+            { $push: { "state.chat": message } }
+        );
+        io.to(projectId).emit("receiveMessage", { projectId, message });
+    });
+
+    socket.on("disconnect", () => {
+        console.log("🔴 User disconnected:", socket.id);
+    });
+});
+
+// === START SERVER ===
+const PORT = process.env.PORT || 4000;
+server.listen(PORT, () => console.log(`🚀 Server running on port ${PORT}`));
