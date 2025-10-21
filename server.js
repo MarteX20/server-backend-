@@ -50,6 +50,24 @@ app.post("/projects", async (req, res) => {
     res.json({ _id: result.insertedId, ...newProject });
 });
 
+// DELETE project by ID
+app.delete("/projects/:id", async (req, res) => {
+    try {
+        const { id } = req.params;
+        const result = await projectsCollection.deleteOne({ _id: new ObjectId(id) });
+
+        if (result.deletedCount === 1) {
+            console.log(`🗑️ Project ${id} deleted`);
+            res.json({ success: true, message: "Project deleted" });
+        } else {
+            res.status(404).json({ success: false, message: "Project not found" });
+        }
+    } catch (error) {
+        console.error("❌ Error deleting project:", error);
+        res.status(500).json({ success: false, message: "Server error" });
+    }
+});
+
 // === SOCKET.IO ===
 io.on("connection", (socket) => {
     console.log("🟢 User connected:", socket.id);
