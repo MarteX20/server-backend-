@@ -5,6 +5,11 @@ import cors from "cors";
 import { MongoClient, ObjectId } from "mongodb";
 import dotenv from "dotenv";
 
+import multer from "multer";
+import path from "path";
+import fs from "fs";
+
+
 dotenv.config();
 
 const app = express();
@@ -67,6 +72,34 @@ app.delete("/projects/:id", async (req, res) => {
         res.status(500).json({ success: false, message: "Server error" });
     }
 });
+
+// === FILE UPLOAD CONFIG ===
+const uploadDir = "./uploads";
+if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir);
+
+const storage = multer.diskStorage({
+    destination: (req, file, cb) => cb(null, uploadDir),
+    filename: (req, file, cb) => cb(null, Date.now() + "-" + file.originalname)
+});
+
+const upload = multer({
+    storage,
+    fileFilter: (req, file, cb) => {
+        const allowed = [".stl", ".stp"];
+        const ext = path.extname(file.originalname).toLowerCase();
+        allowed.includes(ext) ? cb(null, true) : cb(new Error("Only .stl and .stp files allowed"));
+    }
+});
+
+// === UPLOAD ROUTE ===
+app.post("/upload", upload.single("model"), (req, res) => {
+    if (!req.file) return res.status(400).json({ error: "No file uploaded" });
+    const fileUrl = `/uploads/${req.file.filename}`;
+    res.json({ fileUrl });
+});
+
+app.use("/uploads", express.static(path.resolve("uploads")));
+
 
 // === SOCKET.IO ===
 io.on("connection", (socket) => {
@@ -138,6 +171,16 @@ io.on("connection", (socket) => {
         );
         io.to(projectId).emit("receiveMessage", { projectId, message });
     });
+
+    // Upload model
+    socket.on("modelUploaded", async ({ projectId, fileUrl }) => {
+        await projectsCollection.updateOne(
+            { _id: new ObjectId(projectId) },
+            { $set: { "state.model": fileUrl } }
+        );
+        io.to(projectId).emit("modelLoaded", { projectId, fileUrl });
+    });
+
 
     socket.on("disconnect", () => {
         console.log("🔴 User disconnected:", socket.id);
