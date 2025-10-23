@@ -175,7 +175,7 @@ io.on("connection", (socket) => {
     // Upload model
     socket.on("modelUploaded", async ({ projectId, fileUrl }) => {
         await projectsCollection.updateOne(
-            { _id: new createFromTime(projectId) },
+            { _id: new ObjectId(projectId) },
             {
                 $set: {
                     "state.model": fileUrl,
