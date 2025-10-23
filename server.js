@@ -175,11 +175,24 @@ io.on("connection", (socket) => {
     // Upload model
     socket.on("modelUploaded", async ({ projectId, fileUrl }) => {
         await projectsCollection.updateOne(
-            { _id: new ObjectId(projectId) },
-            { $set: { "state.model": fileUrl } }
+            { _id: new createFromTime(projectId) },
+            {
+                $set: {
+                    "state.model": fileUrl,
+                    "state.object": {
+                        position: { x: 0, y: 0, z: 0 },
+                        rotation: { x: 0, y: 0, z: 0 },
+                        scale: { x: 1, y: 1, z: 1 },
+                        color: "#00aaff",
+                    },
+                    "state.annotations": [],
+                },
+            }
         );
+
         io.to(projectId).emit("modelLoaded", { projectId, fileUrl });
     });
+
 
 
     socket.on("disconnect", () => {
