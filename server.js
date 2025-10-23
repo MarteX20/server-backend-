@@ -101,6 +101,17 @@ io.on("connection", (socket) => {
         socket.to(projectId).emit("cameraUpdated", { projectId, camera, socketId });
     });
 
+    // Update cube color
+    socket.on("updateCubeColor", async ({ projectId, color }) => {
+        await projectsCollection.updateOne(
+            { _id: new ObjectId(projectId) },
+            { $set: { "state.object.color": color } }
+        );
+
+        io.to(projectId).emit("cubeColorUpdated", { projectId, color });
+    });
+
+
     // Add annotation
     socket.on("addAnnotation", async ({ projectId, annotation }) => {
         await projectsCollection.updateOne(
